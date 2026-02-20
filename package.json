@@ -1,0 +1,29 @@
+{
+  "name": "comfyclaw",
+  "version": "1.0.0",
+  "private": false,
+  "description": "CLI for discovering, inspecting, and running ComfyUI workflows with tag-based overrides",
+  "main": "cli.js",
+  "bin": {
+    "comfyclaw": "./cli.js"
+  },
+  "scripts": {
+    "list": "node cli.js --list",
+    "describe": "node cli.js --describe",
+    "run": "node cli.js --run"
+  },
+  "keywords": [
+    "comfyui",
+    "cli",
+    "stable-diffusion",
+    "image-generation",
+    "video-generation",
+    "workflow",
+    "api"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.994.0",
+    "ws": "^8.18.3"
+  }
+}
