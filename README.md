@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/logo.png" alt="ComfyClaw Logo" width="200">
+</p>
+
 # ComfyClaw 🐾
 
 A CLI for discovering, inspecting, and running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) workflows — with **tag-based parameter overrides** and **server-aware introspection**.
@@ -134,6 +138,8 @@ Node-ID based (fallback for untagged workflows):
 ## The `@tag` System
 
 Tag key nodes in your ComfyUI workflow by setting `_meta.title` to a name starting with `@`:
+
+![Example workflow with @tags highlighted](images/workflow-example.png)
 
 ```json
 "6": {
