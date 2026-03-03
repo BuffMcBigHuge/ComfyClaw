@@ -12,25 +12,38 @@ A CLI for discovering, inspecting, and running [ComfyUI](https://github.com/comf
 
 ## Install
 
+Install globally via npm:
+
+```bash
+npm install -g comfyclaw
+```
+
+Or clone and link locally:
+
 ```bash
 git clone https://github.com/BuffMcBigHuge/ComfyClaw.git
 cd ComfyClaw
 npm install
+npm link
 ```
+
+After either method, the `comfyclaw` command is available globally.
 
 ---
 
 ## Quick Start
 
+Create a `workflows/` folder in your project directory and place your ComfyUI API-format workflow JSON files there (see [Adding Workflows](#adding-workflows)).
+
 ```bash
 # List available workflows
-node cli.js --list
+comfyclaw --list
 
 # See what's editable (queries the live server for available models/samplers)
-node cli.js --describe text2image-example
+comfyclaw --describe text2image-example
 
 # Run with tag-based overrides
-node cli.js --run text2image-example outputs \
+comfyclaw --run text2image-example outputs \
   --set @prompt.text="a beautiful sunset over the ocean" \
   --set @ksampler.steps=25 \
   --set @ksampler.seed=42
@@ -42,10 +55,10 @@ node cli.js --run text2image-example outputs \
 
 ### `--list`
 
-Lists all API workflows in the `workflows/` directory.
+Lists all API workflows in the `workflows/` directory (relative to where you run the command).
 
 ```
-$ node cli.js --list
+$ comfyclaw --list
 Available workflows:
 
   text2image-example
@@ -58,7 +71,7 @@ Total: 1 workflow(s)
 Shows every `@tag` in a workflow and its editable parameters. If a ComfyUI server is reachable, it queries `/object_info` to show all **valid values** for enum inputs (checkpoints, samplers, schedulers). The currently selected value is marked with ★.
 
 ```
-$ node cli.js --describe text2image-example
+$ comfyclaw --describe text2image-example
 Workflow: text2image-example
 Tags: 5
 Server: http://localhost:8188
@@ -102,7 +115,7 @@ Server: http://localhost:8188
 Executes a workflow on a ComfyUI server, downloads output files.
 
 ```bash
-node cli.js --run text2image-example outputs \
+comfyclaw --run text2image-example outputs \
   --set @prompt.text="cinematic neon city at night" \
   --set @negative.text="watermark, blurry" \
   --set @ksampler.steps=30 \
@@ -167,8 +180,8 @@ Each `@tag` must be unique within a workflow.
 
 1. In ComfyUI, click **Save (API Format)** to export your workflow as an API prompt graph (this is the JSON with numeric node IDs as keys — **not** the default UI export)
 2. Tag the nodes you want to be editable with `@tag` names in `_meta.title`
-3. Save as `workflows/<name>-api.json`
-4. Verify with `node cli.js --describe <name>`
+3. Save as `workflows/<name>-api.json` in the directory where you'll run `comfyclaw`
+4. Verify with `comfyclaw --describe <name>`
 
 > **Important:** ComfyClaw requires the **API format** export. The default "Save" in ComfyUI produces a UI export (with `nodes` and `links` arrays) which is not supported. Use **Save (API Format)** instead.
 

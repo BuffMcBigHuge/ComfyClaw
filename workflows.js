@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const WORKFLOWS_DIR = path.join(__dirname, 'workflows');
+const WORKFLOWS_DIR = path.join(process.cwd(), 'workflows');
 
 /**
  * List all available API workflows.
@@ -63,7 +63,7 @@ function loadWorkflow(name) {
         `  ${apiPath}\n` +
         `  ${directPath}\n` +
         `  ${jsonPath}\n` +
-        `Run "node cli.js --list" to see available workflows.`
+        `Run "comfyclaw --list" to see available workflows.`
     );
 }
 

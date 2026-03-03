@@ -7,11 +7,16 @@
   "bin": {
     "comfyclaw": "./cli.js"
   },
-  "scripts": {
-    "list": "node cli.js --list",
-    "describe": "node cli.js --describe",
-    "run": "node cli.js --run"
-  },
+  "files": [
+    "cli.js",
+    "comfy.js",
+    "config.js",
+    "helpers.js",
+    "patch.js",
+    "workflows.js",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "comfyui",
     "cli",

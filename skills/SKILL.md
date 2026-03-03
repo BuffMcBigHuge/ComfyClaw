@@ -12,16 +12,14 @@ A CLI tool for discovering, inspecting, and executing ComfyUI workflows.
 ## Quick Reference
 
 ```bash
-cd <ComfyClaw directory>
-
 # List available workflows
-node cli.js --list
+comfyclaw --list
 
 # See editable parameters (queries live server for valid values)
-node cli.js --describe <workflow>
+comfyclaw --describe <workflow>
 
 # Run a workflow with overrides
-node cli.js --run <workflow> [outDir] --set @tag.key=value ...
+comfyclaw --run <workflow> [outDir] --set @tag.key=value ...
 ```
 
 ---
@@ -29,7 +27,7 @@ node cli.js --run <workflow> [outDir] --set @tag.key=value ...
 ## 1. Discover Workflows (`--list`)
 
 ```bash
-node cli.js --list
+comfyclaw --list
 ```
 
 Prints available workflow names. Use these names with `--describe` and `--run`.
@@ -39,7 +37,7 @@ Prints available workflow names. Use these names with `--describe` and `--run`.
 ## 2. Inspect a Workflow (`--describe`)
 
 ```bash
-node cli.js --describe text2image-example
+comfyclaw --describe text2image-example
 ```
 
 Shows every `@tag` in the workflow and its editable parameters. If a ComfyUI server is reachable, it queries the server to show all valid values for enum inputs (checkpoints, samplers, schedulers). The currently selected value is marked with ★.
@@ -54,7 +52,7 @@ Shows every `@tag` in the workflow and its editable parameters. If a ComfyUI ser
 ## 3. Run a Workflow (`--run`)
 
 ```bash
-node cli.js --run <workflow> [outDir] [--set @tag.key=value ...]
+comfyclaw --run <workflow> [outDir] [--set @tag.key=value ...]
 ```
 
 ### Override syntax
@@ -75,7 +73,7 @@ Node-ID based (for workflows without @tags):
 ### Full example
 
 ```bash
-node cli.js --run text2image-example outputs \
+comfyclaw --run text2image-example outputs \
   --set @prompt.text="cinematic neon city at night, rain, 35mm" \
   --set @negative.text="watermark, text, logo, blurry" \
   --set @ksampler.seed=111111 \

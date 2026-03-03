@@ -3,9 +3,9 @@
 // Unified CLI for ComfyUI workflow discovery, inspection, and execution.
 //
 // Usage:
-//   node cli.js --list
-//   node cli.js --describe <workflow>
-//   node cli.js --run <workflow> [outDir] [--set @tag.key=value ...]
+//   comfyclaw --list
+//   comfyclaw --describe <workflow>
+//   comfyclaw --run <workflow> [outDir] [--set @tag.key=value ...]
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -119,8 +119,8 @@ function cmdList() {
     }
     console.log(`\nTotal: ${workflows.length} workflow(s)`);
     console.log('\nUsage:');
-    console.log('  node cli.js --describe <name>   Show editable parameters');
-    console.log('  node cli.js --run <name>        Execute a workflow');
+    console.log('  comfyclaw --describe <name>   Show editable parameters');
+    console.log('  comfyclaw --run <name>        Execute a workflow');
 }
 
 /**
@@ -170,8 +170,8 @@ async function getServerURL() {
 async function cmdDescribe(name) {
     if (!name) {
         console.error('Error: --describe requires a workflow name.');
-        console.error('Usage: node cli.js --describe <workflow>');
-        console.error('Run "node cli.js --list" to see available workflows.');
+        console.error('Usage: comfyclaw --describe <workflow>');
+        console.error('Run "comfyclaw --list" to see available workflows.');
         process.exit(2);
     }
 
@@ -255,22 +255,22 @@ async function cmdDescribe(name) {
     if (example) {
         const s = example.scalar[0];
         const val = typeof s.value === 'string' ? '"your value here"' : s.value;
-        console.log(`  node cli.js --run ${name} outputs --set ${example.title}.${s.key}=${val}`);
+        console.log(`  comfyclaw --run ${name} outputs --set ${example.title}.${s.key}=${val}`);
     } else {
-        console.log(`  node cli.js --run ${name} outputs`);
+        console.log(`  comfyclaw --run ${name} outputs`);
     }
 }
 
 async function cmdRun(name, argv) {
     if (!name) {
         console.error('Error: --run requires a workflow name.');
-        console.error('Usage: node cli.js --run <workflow> [outDir] [--set @tag.key=value ...]');
-        console.error('Run "node cli.js --list" to see available workflows.');
+        console.error('Usage: comfyclaw --run <workflow> [outDir] [--set @tag.key=value ...]');
+        console.error('Run "comfyclaw --list" to see available workflows.');
         process.exit(2);
     }
 
     // Parse remaining argv: [outDir] [--set key=val ...]
-    let outDir = path.join(__dirname, 'outputs');
+    let outDir = path.join(process.cwd(), 'outputs');
     const setArgs = [];
     let i = 0;
 
@@ -418,11 +418,11 @@ async function cmdRun(name, argv) {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 function printUsage() {
-    console.log('ComfyUI CLI — Discover, inspect, and run ComfyUI workflows.\n');
+    console.log('ComfyClaw — Discover, inspect, and run ComfyUI workflows.\n');
     console.log('Usage:');
-    console.log('  node cli.js --list                              List available workflows');
-    console.log('  node cli.js --describe <workflow>               Show editable @tag parameters');
-    console.log('  node cli.js --run <workflow> [outDir] [--set]   Run a workflow\n');
+    console.log('  comfyclaw --list                              List available workflows');
+    console.log('  comfyclaw --describe <workflow>               Show editable @tag parameters');
+    console.log('  comfyclaw --run <workflow> [outDir] [--set]   Run a workflow\n');
     console.log('Override parameters:');
     console.log('  --set @tag.key=value     Tag-based override (recommended)');
     console.log('  --set nodeId.key=value   Direct node-ID override\n');
