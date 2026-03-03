@@ -97,6 +97,7 @@ comfyclaw --run text2image-example outputs \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `COMFYCLAW_WORKFLOWS` | `./workflows` | Path to workflows directory |
 | `COMFYUI_SERVER` | (auto-select) | Force a specific server URL |
 | `COMFYUI_TIMEOUT_MS` | `180000` | Max wait for completion (ms) |
 

@@ -427,6 +427,7 @@ function printUsage() {
     console.log('  --set @tag.key=value     Tag-based override (recommended)');
     console.log('  --set nodeId.key=value   Direct node-ID override\n');
     console.log('Environment:');
+    console.log('  COMFYCLAW_WORKFLOWS  Path to workflows directory (default: ./workflows)');
     console.log('  COMFYUI_SERVER       Force a specific server URL');
     console.log('  COMFYUI_TIMEOUT_MS   Max wait time (default: 180000)');
 }

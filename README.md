@@ -191,6 +191,7 @@ Each `@tag` must be unique within a workflow.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `COMFYCLAW_WORKFLOWS` | `./workflows` | Path to workflows directory |
 | `COMFYUI_SERVER` | (auto-select) | Force a specific server URL |
 | `COMFYUI_TIMEOUT_MS` | `180000` | Max wait for workflow completion (ms) |
 | `AWS_ACCESS_KEY_ID` | — | AWS credentials (for S3 upload) |
