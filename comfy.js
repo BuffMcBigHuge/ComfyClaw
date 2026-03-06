@@ -4,6 +4,8 @@
 const WebSocket = require('ws');
 const crypto = require('node:crypto');
 const url = require('node:url');
+const fs = require('node:fs');
+const path = require('node:path');
 
 class ComfyUI {
   constructor({
@@ -445,6 +447,70 @@ class ComfyUI {
         reject(err);
       }
     });
+  }
+
+  /**
+   * Upload a local file to the ComfyUI server.
+   * Uses the /upload/image endpoint (handles both images and audio).
+   *
+   * @param {string} filePath - Absolute or relative path to the local file
+   * @param {object} [opts]
+   * @param {string} [opts.subfolder] - Optional subfolder on the server
+   * @param {boolean} [opts.overwrite] - Overwrite if file exists (default: true)
+   * @returns {Promise<{name: string, subfolder: string, type: string}>}
+   */
+  async uploadFile(filePath, { subfolder, overwrite = true } = {}) {
+    const resolvedPath = path.resolve(filePath);
+
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error(`File not found: ${resolvedPath}`);
+    }
+
+    const fileBuffer = fs.readFileSync(resolvedPath);
+    const filename = path.basename(resolvedPath);
+
+    // Determine MIME type from extension
+    const ext = path.extname(filename).slice(1).toLowerCase();
+    const mimeTypes = {
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      webp: 'image/webp',
+      gif: 'image/gif',
+      bmp: 'image/bmp',
+      tiff: 'image/tiff',
+      wav: 'audio/wav',
+      mp3: 'audio/mpeg',
+      flac: 'audio/flac',
+      ogg: 'audio/ogg',
+      m4a: 'audio/mp4',
+    };
+    const mimeType = mimeTypes[ext] || 'application/octet-stream';
+
+    // Build multipart form data
+    const blob = new Blob([fileBuffer], { type: mimeType });
+    const formData = new FormData();
+    formData.append('image', blob, filename);
+    formData.append('overwrite', overwrite ? 'true' : 'false');
+    if (subfolder) {
+      formData.append('subfolder', subfolder);
+    }
+
+    console.log(`Uploading ${filename} (${fileBuffer.length} bytes) to ${this.comfyUIServerURL}/upload/image ...`);
+
+    const response = await fetch(`${this.comfyUIServerURL}/upload/image`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Upload failed (HTTP ${response.status}): ${text}`);
+    }
+
+    const result = await response.json();
+    console.log(`Upload complete: ${result.name} (subfolder: ${result.subfolder || ''}, type: ${result.type || 'input'})`);
+    return result;
   }
 }
 

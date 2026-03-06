@@ -83,6 +83,22 @@ comfyclaw --run text2image-example outputs \
   --set @size.height=768
 ```
 
+### File upload (`--file`)
+
+Upload local images or audio to the ComfyUI server as part of a run. Files are uploaded before the workflow is queued, and the server-assigned filename replaces the value in the prompt.
+
+```bash
+# Tag-based (recommended):
+comfyclaw --run img2img outputs \
+  --file @loadimage.image=./photo.png \
+  --set @ksampler.steps=25
+
+# Node-ID based:
+comfyclaw --run img2img outputs --file 1.image=./photo.png
+```
+
+Supported formats: PNG, JPG, JPEG, WebP, GIF, BMP, TIFF, WAV, MP3, FLAC, OGG, M4A.
+
 ### Exit codes
 
 | Code | Meaning |

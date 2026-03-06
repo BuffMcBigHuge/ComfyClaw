@@ -264,14 +264,15 @@ async function cmdDescribe(name) {
 async function cmdRun(name, argv) {
     if (!name) {
         console.error('Error: --run requires a workflow name.');
-        console.error('Usage: comfyclaw --run <workflow> [outDir] [--set @tag.key=value ...]');
+        console.error('Usage: comfyclaw --run <workflow> [outDir] [--set @tag.key=value ...] [--file @tag.key=path ...]');
         console.error('Run "comfyclaw --list" to see available workflows.');
         process.exit(2);
     }
 
-    // Parse remaining argv: [outDir] [--set key=val ...]
+    // Parse remaining argv: [outDir] [--set key=val ...] [--file key=path ...]
     let outDir = path.join(process.cwd(), 'outputs');
     const setArgs = [];
+    const fileArgs = [];
     let i = 0;
 
     // First non-flag arg after name is outDir
@@ -284,6 +285,10 @@ async function cmdRun(name, argv) {
         if (argv[i] === '--set') {
             if (!argv[i + 1]) throw new Error('Missing value for --set');
             setArgs.push(argv[i + 1]);
+            i++;
+        } else if (argv[i] === '--file') {
+            if (!argv[i + 1]) throw new Error('Missing value for --file');
+            fileArgs.push(argv[i + 1]);
             i++;
         }
     }
@@ -315,6 +320,34 @@ async function cmdRun(name, argv) {
             throw new Error('All ComfyUI servers unavailable (see logs above).');
         }
         serverToUse = res.serverToUse;
+    }
+
+    // Upload files (--file args) to the ComfyUI server before queuing
+    if (fileArgs.length > 0) {
+        // We need a temporary ComfyUI instance just for uploading
+        // (the full WS connection happens later for the actual run)
+        const uploader = { comfyUIServerURL: serverToUse };
+        // Bind the uploadFile method from ComfyUI prototype
+        uploader.uploadFile = ComfyUI.prototype.uploadFile.bind(uploader);
+
+        for (const arg of fileArgs) {
+            const idxEq = arg.indexOf('=');
+            if (idxEq === -1) throw new Error(`Invalid --file '${arg}'. Expected @tag.key=/path/to/file or nodeId.key=/path/to/file`);
+            const left = arg.slice(0, idxEq);
+            const filePath = arg.slice(idxEq + 1);
+
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File not found: ${path.resolve(filePath)}`);
+            }
+
+            // Upload the file and get the server-side filename
+            const result = await uploader.uploadFile(filePath);
+            const serverFilename = result.name;
+
+            // Add to setArgs so it gets resolved like any other --set override
+            setArgs.push(`${left}=${serverFilename}`);
+            console.log(`  Mapped --file ${left} → ${serverFilename}`);
+        }
     }
 
     // Detect save nodes
@@ -422,10 +455,13 @@ function printUsage() {
     console.log('Usage:');
     console.log('  comfyclaw --list                              List available workflows');
     console.log('  comfyclaw --describe <workflow>               Show editable @tag parameters');
-    console.log('  comfyclaw --run <workflow> [outDir] [--set]   Run a workflow\n');
+    console.log('  comfyclaw --run <workflow> [outDir] [--set] [--file]   Run a workflow\n');
     console.log('Override parameters:');
-    console.log('  --set @tag.key=value     Tag-based override (recommended)');
-    console.log('  --set nodeId.key=value   Direct node-ID override\n');
+    console.log('  --set  @tag.key=value      Tag-based override (recommended)');
+    console.log('  --set  nodeId.key=value    Direct node-ID override\n');
+    console.log('File upload (images, audio):');
+    console.log('  --file @tag.key=/path       Upload file to server and inject filename');
+    console.log('  --file nodeId.key=/path     Same, using node ID\n');
     console.log('Environment:');
     console.log('  COMFYCLAW_WORKFLOWS  Path to workflows directory (default: ./workflows)');
     console.log('  COMFYUI_SERVER       Force a specific server URL');
