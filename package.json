@@ -5,7 +5,7 @@
   "description": "CLI for discovering, inspecting, and running ComfyUI workflows with tag-based overrides",
   "main": "cli.js",
   "bin": {
-    "comfyclaw": "./cli.js"
+    "comfyclaw": "cli.js"
   },
   "files": [
     "cli.js",
@@ -30,5 +30,18 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.994.0",
     "ws": "^8.18.3"
-  }
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BuffMcBigHuge/ComfyClaw.git"
+  },
+  "author": "BuffMcBigHuge",
+  "bugs": {
+    "url": "https://github.com/BuffMcBigHuge/ComfyClaw/issues"
+  },
+  "homepage": "https://github.com/BuffMcBigHuge/ComfyClaw#readme"
 }
