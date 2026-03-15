@@ -297,20 +297,7 @@ async function cmdRun(name, argv) {
 
     const { prompt: apiPrompt } = loadWorkflow(name);
 
-    // Resolve tag-based + node-id overrides
-    const overrides = resolveTagOverrides(apiPrompt, setArgs);
-    const { applied, skipped } = applyNodeInputOverrides(apiPrompt, overrides);
-
-    if (applied.length) {
-        console.log('Applied overrides:');
-        applied.forEach((o) => console.log(`  - node ${o.nodeId}: ${o.key} = ${JSON.stringify(o.value)}`));
-    }
-    if (skipped.length) {
-        console.log('Skipped overrides:');
-        skipped.forEach((o) => console.log(`  - node ${o.nodeId}${o.key ? '.' + o.key : ''}: ${o.reason}`));
-    }
-
-    // Server selection
+    // Server selection (needed early for file uploads)
     const envServer = process.env.COMFYUI_SERVER;
     let serverToUse = envServer || null;
 
@@ -322,12 +309,10 @@ async function cmdRun(name, argv) {
         serverToUse = res.serverToUse;
     }
 
-    // Upload files (--file args) to the ComfyUI server before queuing
+    // Upload files (--file args) BEFORE override resolution so that
+    // the uploaded server-side filenames are included in setArgs
     if (fileArgs.length > 0) {
-        // We need a temporary ComfyUI instance just for uploading
-        // (the full WS connection happens later for the actual run)
         const uploader = { comfyUIServerURL: serverToUse };
-        // Bind the uploadFile method from ComfyUI prototype
         uploader.uploadFile = ComfyUI.prototype.uploadFile.bind(uploader);
 
         for (const arg of fileArgs) {
@@ -340,14 +325,25 @@ async function cmdRun(name, argv) {
                 throw new Error(`File not found: ${path.resolve(filePath)}`);
             }
 
-            // Upload the file and get the server-side filename
             const result = await uploader.uploadFile(filePath);
             const serverFilename = result.name;
 
-            // Add to setArgs so it gets resolved like any other --set override
             setArgs.push(`${left}=${serverFilename}`);
             console.log(`  Mapped --file ${left} → ${serverFilename}`);
         }
+    }
+
+    // Resolve tag-based + node-id overrides (now includes any --file entries)
+    const overrides = resolveTagOverrides(apiPrompt, setArgs);
+    const { applied, skipped } = applyNodeInputOverrides(apiPrompt, overrides);
+
+    if (applied.length) {
+        console.log('Applied overrides:');
+        applied.forEach((o) => console.log(`  - node ${o.nodeId}: ${o.key} = ${JSON.stringify(o.value)}`));
+    }
+    if (skipped.length) {
+        console.log('Skipped overrides:');
+        skipped.forEach((o) => console.log(`  - node ${o.nodeId}${o.key ? '.' + o.key : ''}: ${o.reason}`));
     }
 
     // Detect save nodes
