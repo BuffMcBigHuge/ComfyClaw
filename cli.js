@@ -389,33 +389,49 @@ async function cmdRun(name, argv) {
             comfyUIServerURL: serverToUse,
             nodes: { api_save: saveNodes },
 
-            onSaveCallback: async ({ message, promptId }) => {
-                try {
-                    // TODO: SaveAudio Handler
-                    const files = (message?.data?.output?.images || []).concat(message?.data?.output?.gifs || []);
-                    for (const file of files) {
-                        const buf = await comfy.getFile(file);
-                        const outPath = path.join(outDir, `${promptId}-${file.filename}`);
-                        fs.writeFileSync(outPath, buf);
-                        downloaded.push(outPath);
-                        console.log(`Saved: ${outPath} (${buf.length} bytes)`);
-
-                        // Optional S3 upload
-                        if (config.aws?.enabled) {
-                            await uploadToS3(outPath, buf);
-                        }
-                    }
-                } catch (e) {
-                    rejectDone(e);
-                }
+            onSaveCallback: async ({ message }) => {
+                // Log per-node save events for progress visibility.
+                // Actual file downloading happens after execution_success via /history.
+                const nodeId = message?.data?.node;
+                const count = (message?.data?.output?.images || []).length
+                    + (message?.data?.output?.gifs || []).length;
+                console.log(`Node ${nodeId} reported ${count} output(s) (will download all via /history)`);
             },
 
             onMessageCallback: async ({ message }) => {
                 if (message?.type === 'execution_error') {
                     rejectDone(new Error(message?.data?.exception_message || 'Execution error'));
+                    return;
                 }
                 if (message?.type === 'execution_success') {
-                    resolveDone();
+                    try {
+                        // Fetch complete outputs from /history (authoritative for batch outputs)
+                        const history = await comfy.getHistory(comfy.promptId);
+                        const outputs = history?.outputs || {};
+
+                        for (const nodeId of saveNodes) {
+                            const nodeOutput = outputs[nodeId] || {};
+                            const files = [
+                                ...(nodeOutput.images || []),
+                                ...(nodeOutput.gifs || []),
+                            ];
+                            for (const file of files) {
+                                const buf = await comfy.getFile(file);
+                                const outPath = path.join(outDir, `${comfy.promptId}-${file.filename}`);
+                                fs.writeFileSync(outPath, buf);
+                                downloaded.push(outPath);
+                                console.log(`Saved: ${outPath} (${buf.length} bytes)`);
+
+                                // Optional S3 upload
+                                if (config.aws?.enabled) {
+                                    await uploadToS3(outPath, buf);
+                                }
+                            }
+                        }
+                        resolveDone();
+                    } catch (e) {
+                        rejectDone(e);
+                    }
                 }
             },
 

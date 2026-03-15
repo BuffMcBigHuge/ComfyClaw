@@ -450,6 +450,23 @@ class ComfyUI {
   }
 
   /**
+   * Fetch the execution history for a given prompt ID.
+   * Returns the complete outputs for all nodes, which is the authoritative
+   * source for batch outputs (websocket `executed` messages may be incomplete).
+   *
+   * @param {string} promptId - The prompt ID to fetch history for
+   * @returns {Promise<object>} History object with outputs, status, etc.
+   */
+  async getHistory(promptId) {
+    const response = await fetch(`${this.comfyUIServerURL}/history/${promptId}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch history: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data[promptId];
+  }
+
+  /**
    * Upload a local file to the ComfyUI server.
    * Uses the /upload/image endpoint (handles both images and audio).
    *

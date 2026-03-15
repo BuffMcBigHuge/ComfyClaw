@@ -1,6 +1,6 @@
 {
   "name": "comfyclaw",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": false,
   "description": "CLI for discovering, inspecting, and running ComfyUI workflows with tag-based overrides",
   "main": "cli.js",
