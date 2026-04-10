@@ -1,6 +1,6 @@
 ---
 name: comfyclaw
-description: Run ComfyUI workflows via CLI. Use --list to discover workflows, --describe to see editable parameters (with live server values), --run to execute with --set @tag overrides. No need to read workflow files directly.
+description: Run ComfyUI workflows via CLI. Use --list to discover workflows, --describe to see editable parameters (with live server values), --run to execute with --set @tag overrides, and --inventory to discover available models, LoRAs, and VAEs. No need to read workflow files directly.
 ---
 
 # ComfyClaw Skill
@@ -20,6 +20,11 @@ comfyclaw --describe <workflow>
 
 # Run a workflow with overrides
 comfyclaw --run <workflow> [outDir] --set @tag.key=value ...
+
+# Discover available models
+comfyclaw --inventory pull
+comfyclaw --inventory scan /path/to/models
+comfyclaw --inventory list loras
 ```
 
 ---
@@ -106,6 +111,53 @@ Supported formats: PNG, JPG, JPEG, WebP, GIF, BMP, TIFF, WAV, MP3, FLAC, OGG, M4
 | 0 | Success |
 | 1 | Runtime error (server unavailable, execution failed, timeout) |
 | 2 | Usage error (bad arguments, workflow not found) |
+
+---
+
+## 4. Model & LoRA Inventory (`--inventory`)
+
+Discover available models, LoRAs, VAEs, and other assets — by querying a ComfyUI server or scanning local directories.
+
+### Pull from server
+
+```bash
+comfyclaw --inventory pull
+```
+
+Queries the ComfyUI `/object_info` API for all available checkpoints, loras, vaes, upscalers, samplers, and schedulers.
+
+### Scan local directories
+
+```bash
+comfyclaw --inventory scan /path/to/ComfyUI/models
+comfyclaw --inventory scan /path/to/checkpoints /path/to/loras
+```
+
+Recursively walks directories for model files (`.safetensors`, `.ckpt`, `.pt`, `.pth`, `.bin`) and auto-categorizes by parent folder name:
+- `checkpoints/` or `ckpts/` → checkpoints
+- `loras/` or `lora/` → loras
+- `vae/` or `vaes/` → vaes
+- `upscale_models/` or `upscalers/` → upscalers
+
+Scanned results are merged with existing inventory.
+
+### Browse assets
+
+```bash
+# Summary of all types and counts
+comfyclaw --inventory list
+
+# List a specific type
+comfyclaw --inventory list loras
+comfyclaw --inventory list checkpoints
+```
+
+### Inventory workflow for agents
+
+1. Run `--inventory pull` or `--inventory scan` to discover what's available
+2. Use `--inventory list <type>` to see assets before selecting a workflow
+3. Use `--describe` to confirm which checkpoint/lora values are valid
+4. Periodically re-run `pull`/`scan` after new models are installed
 
 ---
 

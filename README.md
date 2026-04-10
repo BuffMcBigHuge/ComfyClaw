@@ -187,6 +187,55 @@ Each `@tag` must be unique within a workflow.
 
 ---
 
+## Inventory
+
+ComfyClaw can discover available models, LoRAs, VAEs, and other assets — either by querying a running ComfyUI server or by scanning local directories.
+
+### Pull from server
+
+```bash
+comfyclaw --inventory pull
+```
+
+Queries the ComfyUI `/object_info` API and saves a list of all available checkpoints, loras, vaes, upscalers, samplers, and schedulers to `inventory/inventory.json`.
+
+### Scan local directories
+
+```bash
+# Scan a ComfyUI models directory
+comfyclaw --inventory scan /path/to/ComfyUI/models
+
+# Scan multiple directories
+comfyclaw --inventory scan /path/to/checkpoints /path/to/loras
+```
+
+Recursively walks the given directories for model files (`.safetensors`, `.ckpt`, `.pt`, `.pth`, `.bin`) and auto-categorizes them based on parent folder names:
+
+| Folder Name | Asset Type |
+|-------------|------------|
+| `checkpoints/`, `ckpts/` | checkpoints |
+| `loras/`, `lora/` | loras |
+| `vae/`, `vaes/` | vaes |
+| `upscale_models/`, `upscalers/` | upscalers |
+| _(other)_ | uncategorized |
+
+Scanned results are merged with any existing inventory.
+
+### Browse assets
+
+```bash
+# Summary of all asset types and counts
+comfyclaw --inventory list
+
+# List all LoRAs
+comfyclaw --inventory list loras
+
+# List all checkpoints
+comfyclaw --inventory list checkpoints
+```
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -264,13 +313,15 @@ Error: ComfyUI server error (HTTP 400):
 ## Architecture
 
 ```
-cli.js              Unified CLI entrypoint (--list, --describe, --run)
+cli.js              Unified CLI entrypoint (--list, --describe, --run, --inventory)
 workflows.js        Workflow discovery and loading
 patch.js            Safe parameter overrides with @tag resolution
 comfy.js            ComfyUI WebSocket/HTTP client
 helpers.js          Server selection (lowest queue)
+inventory.js        Model/LoRA/VAE inventory (pull, scan, list)
 config.js           Server and AWS S3 configuration
 workflows/          Workflow JSON files (*-api.json)
+inventory/          Discovered asset lists and metadata
 ```
 
 ---

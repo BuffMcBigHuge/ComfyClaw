@@ -15,6 +15,7 @@ const { applyNodeInputOverrides, resolveTagOverrides } = require('./patch');
 const { getServerWithLowestQueue } = require('./helpers');
 const ComfyUI = require('./comfy');
 const config = require('./config');
+const inventory = require('./inventory');
 
 // ── Optional S3 Upload ──────────────────────────────────────────────────────
 
@@ -460,6 +461,125 @@ async function cmdRun(name, argv) {
     downloaded.forEach((p) => console.log(`  - ${p}`));
 }
 
+// ── Inventory Commands ───────────────────────────────────────────────────────
+
+async function cmdInventoryPull() {
+    const serverURL = await inventory.getServerURL();
+    if (!serverURL) {
+        console.error('No ComfyUI server available. Set COMFYUI_SERVER or configure servers in config.js.');
+        process.exit(1);
+    }
+
+    console.log(`Pulling inventory from ${serverURL}...`);
+    const inv = await inventory.pullInventory(serverURL);
+    inv._server = serverURL;
+    const saved = inventory.saveInventory(inv, serverURL);
+
+    console.log('\nInventory:');
+    for (const [type, items] of Object.entries(saved.assets)) {
+        console.log(`  ${type}: ${items.length} item(s)`);
+    }
+    console.log(`\nSaved to: ${inventory.INVENTORY_DIR}/`);
+}
+
+function cmdInventoryScan(dirs) {
+    if (dirs.length === 0) {
+        console.error('Error: --inventory scan requires at least one directory path.');
+        console.error('Usage: comfyclaw --inventory scan /path/to/models [/more/paths ...]');
+        process.exit(2);
+    }
+
+    console.log(`Scanning ${dirs.length} director${dirs.length === 1 ? 'y' : 'ies'}...`);
+    const scanned = inventory.scanDirectories(dirs);
+
+    const totalFiles = Object.values(scanned).reduce((sum, items) => sum + items.length, 0);
+    if (totalFiles === 0) {
+        console.log('No model files found (.safetensors, .ckpt, .pt, .pth, .bin).');
+        return;
+    }
+
+    // Merge with existing inventory
+    const existing = inventory.loadInventory();
+    const saved = inventory.mergeInventory(existing, scanned, `scan: ${dirs.join(', ')}`);
+
+    console.log('\nDiscovered:');
+    for (const [type, items] of Object.entries(scanned)) {
+        console.log(`  ${type}: ${items.length} file(s)`);
+    }
+
+    console.log('\nInventory (merged):');
+    for (const [type, items] of Object.entries(saved.assets)) {
+        console.log(`  ${type}: ${items.length} item(s)`);
+    }
+    console.log(`\nSaved to: ${inventory.INVENTORY_DIR}/`);
+}
+
+function cmdInventoryList(type) {
+    const inv = inventory.loadInventory();
+    if (!inv) {
+        console.error('No inventory found. Run: comfyclaw --inventory pull');
+        console.error('  or: comfyclaw --inventory scan /path/to/models');
+        process.exit(1);
+    }
+
+    const validTypes = Object.keys(inv.assets);
+
+    if (!type) {
+        // Show summary
+        console.log(`Inventory (updated: ${inv.pulled_at})`);
+        if (inv.source) console.log(`Source: ${inv.source}`);
+        console.log('');
+        for (const [t, items] of Object.entries(inv.assets)) {
+            console.log(`  ${t}: ${items.length}`);
+        }
+        console.log(`\nUse: comfyclaw --inventory list <type>`);
+        console.log(`Types: ${validTypes.join(', ')}`);
+        return;
+    }
+
+    if (!inv.assets[type]) {
+        console.error(`Unknown asset type: "${type}"`);
+        console.error(`Valid types: ${validTypes.join(', ')}`);
+        process.exit(1);
+    }
+
+    const items = inv.assets[type];
+    console.log(`${type} (${items.length}):\n`);
+    for (const item of items) {
+        console.log(`  ${item}`);
+    }
+}
+
+async function cmdInventory(argv) {
+    const sub = argv[0];
+
+    if (!sub || sub === 'help') {
+        console.log('Inventory — Manage available models, LoRAs, VAEs, and more.\n');
+        console.log('Usage:');
+        console.log('  comfyclaw --inventory pull                          Fetch inventory from server');
+        console.log('  comfyclaw --inventory scan <dir> [dir...]           Scan local directories for models');
+        console.log('  comfyclaw --inventory list [type]                   List assets (summary or by type)\n');
+        console.log('Types: checkpoints, loras, vaes, upscalers, samplers, schedulers');
+        console.log('\nExamples:');
+        console.log('  comfyclaw --inventory pull');
+        console.log('  comfyclaw --inventory scan /path/to/ComfyUI/models');
+        console.log('  comfyclaw --inventory list loras');
+        return;
+    }
+
+    if (sub === 'pull') {
+        await cmdInventoryPull();
+    } else if (sub === 'scan') {
+        cmdInventoryScan(argv.slice(1));
+    } else if (sub === 'list') {
+        cmdInventoryList(argv[1]);
+    } else {
+        console.error(`Unknown inventory subcommand: "${sub}"`);
+        console.error('Run: comfyclaw --inventory help');
+        process.exit(2);
+    }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 function printUsage() {
@@ -467,13 +587,18 @@ function printUsage() {
     console.log('Usage:');
     console.log('  comfyclaw --list                              List available workflows');
     console.log('  comfyclaw --describe <workflow>               Show editable @tag parameters');
-    console.log('  comfyclaw --run <workflow> [outDir] [--set] [--file]   Run a workflow\n');
+    console.log('  comfyclaw --run <workflow> [outDir] [--set] [--file]   Run a workflow');
+    console.log('  comfyclaw --inventory <subcommand>            Manage models, LoRAs, VAEs\n');
     console.log('Override parameters:');
     console.log('  --set  @tag.key=value      Tag-based override (recommended)');
     console.log('  --set  nodeId.key=value    Direct node-ID override\n');
     console.log('File upload (images, audio):');
     console.log('  --file @tag.key=/path       Upload file to server and inject filename');
     console.log('  --file nodeId.key=/path     Same, using node ID\n');
+    console.log('Inventory subcommands:');
+    console.log('  pull                        Fetch available assets from ComfyUI server');
+    console.log('  scan <dir> [dir...]         Scan local directories for model files');
+    console.log('  list [type]                 List assets (summary or by type)\n');
     console.log('Environment:');
     console.log('  COMFYCLAW_WORKFLOWS  Path to workflows directory (default: ./workflows)');
     console.log('  COMFYUI_SERVER       Force a specific server URL');
@@ -496,6 +621,8 @@ async function main() {
         await cmdDescribe(argv[1]);
     } else if (command === '--run') {
         await cmdRun(argv[1], argv.slice(2));
+    } else if (command === '--inventory') {
+        await cmdInventory(argv.slice(1));
     } else {
         console.error(`Unknown command: ${command}`);
         printUsage();
