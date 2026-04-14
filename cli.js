@@ -195,49 +195,20 @@ async function cmdDescribe(name) {
         return;
     }
 
-    // Try to reach the server for enum value lookups
-    const serverURL = await getServerURL();
-    const enumCache = {};
-
-    if (serverURL) {
-        // Fetch object_info for each unique class_type
-        const classTypes = [...new Set(tagged.map((t) => t.classType))];
-        await Promise.all(
-            classTypes.map(async (ct) => {
-                enumCache[ct] = await fetchNodeInputInfo(serverURL, ct);
-            }),
-        );
-    }
-
     console.log(`Workflow: ${name}`);
     console.log(`Tags: ${tagged.length}`);
-    if (serverURL) console.log(`Server: ${serverURL}`);
     console.log('');
 
     for (const n of tagged) {
         console.log(`${n.title}  (node ${n.nodeId}, ${n.classType})`);
-        const nodeEnums = enumCache[n.classType] || {};
 
         if (n.scalar.length) {
             console.log('  editable:');
             for (const { key, value } of n.scalar) {
                 const display = typeof value === 'string'
-                    ? (value.length > 60 ? `"${value.slice(0, 57)}..."` : `"${value}"`)
+                    ? `"${value}"`
                     : JSON.stringify(value);
                 console.log(`    --set ${n.title}.${key}=${display}`);
-
-                // Show available enum values from server
-                if (nodeEnums[key]) {
-                    const vals = nodeEnums[key];
-                    const marked = vals.map((v) => {
-                        const current = String(value) === String(v);
-                        return current ? `★ ${v}` : `  ${v}`;
-                    });
-                    console.log(`      values (${vals.length}):`);
-                    for (const m of marked) {
-                        console.log(`        ${m}`);
-                    }
-                }
             }
         } else {
             console.log('  editable: (none)');
