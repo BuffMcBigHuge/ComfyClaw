@@ -1,6 +1,6 @@
 {
   "name": "comfyclaw",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": false,
   "description": "CLI for discovering, inspecting, and running ComfyUI workflows with tag-based overrides",
   "main": "cli.js",
@@ -14,12 +14,14 @@
     "helpers.js",
     "inventory.js",
     "patch.js",
+    "ui-compiler.js",
     "workflows.js",
     "README.md",
     "LICENSE",
     "images",
     "skills",
-    "workflows"
+    "workflows/text2image-example.json",
+    "workflows/text2image-example-api.json"
   ],
   "keywords": [
     "comfyui",
@@ -33,11 +35,11 @@
   "license": "MIT",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.994.0",
+    "playwright-core": "^1.62.1",
     "ws": "^8.18.3"
   },
-  "devDependencies": {},
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
   "repository": {
     "type": "git",

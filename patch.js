@@ -22,6 +22,44 @@ function coerceValue(raw) {
   return raw;
 }
 
+function parseOverrideArg(arg, flag = '--set') {
+  const idxEq = arg.indexOf('=');
+  if (idxEq === -1) {
+    throw new Error(`Invalid ${flag} '${arg}'. Expected @tag.key=value or nodeId.key=value`);
+  }
+
+  const left = arg.slice(0, idxEq);
+  const raw = arg.slice(idxEq + 1);
+  const idxDot = left.indexOf('.');
+  if (idxDot === -1 || idxDot === 0 || idxDot === left.length - 1) {
+    throw new Error(`Invalid ${flag} '${arg}'. Expected @tag.key=value or nodeId.key=value`);
+  }
+
+  return {
+    prefix: left.slice(0, idxDot),
+    key: left.slice(idxDot + 1),
+    raw,
+    left,
+  };
+}
+
+function resolveNodeTarget(apiPrompt, prefix) {
+  if (!prefix.startsWith('@')) return prefix;
+
+  const matches = [];
+  for (const [nodeId, node] of Object.entries(apiPrompt)) {
+    if (node?._meta?.title === prefix) matches.push(nodeId);
+  }
+
+  if (matches.length === 0) {
+    throw new Error(`Tag "${prefix}" not found in workflow. No node has _meta.title === "${prefix}".`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`Tag "${prefix}" is ambiguous: matched nodes [${matches.join(', ')}]. Each @tag must be unique.`);
+  }
+  return matches[0];
+}
+
 /**
  * Apply overrides to an API prompt.
  *
@@ -67,14 +105,7 @@ function applyNodeInputOverrides(apiPrompt, overrides) {
 function parseSetArgs(setArgs) {
   const overrides = {};
   for (const s of setArgs || []) {
-    const idxEq = s.indexOf('=');
-    if (idxEq === -1) throw new Error(`Invalid --set '${s}'. Expected nodeId.key=value`);
-    const left = s.slice(0, idxEq);
-    const raw = s.slice(idxEq + 1);
-    const idxDot = left.indexOf('.');
-    if (idxDot === -1) throw new Error(`Invalid --set '${s}'. Expected nodeId.key=value`);
-    const nodeId = left.slice(0, idxDot);
-    const key = left.slice(idxDot + 1);
+    const { prefix: nodeId, key, raw } = parseOverrideArg(s);
 
     overrides[nodeId] ||= {};
     overrides[nodeId][key] = coerceValue(raw);
@@ -99,38 +130,8 @@ function resolveTagOverrides(apiPrompt, setArgs) {
   const overrides = {};
 
   for (const s of setArgs || []) {
-    const idxEq = s.indexOf('=');
-    if (idxEq === -1) throw new Error(`Invalid --set '${s}'. Expected @tag.key=value or nodeId.key=value`);
-    const left = s.slice(0, idxEq);
-    const raw = s.slice(idxEq + 1);
-    const idxDot = left.indexOf('.');
-    if (idxDot === -1) throw new Error(`Invalid --set '${s}'. Expected @tag.key=value or nodeId.key=value`);
-
-    const prefix = left.slice(0, idxDot);
-    const key = left.slice(idxDot + 1);
-
-    let nodeId;
-
-    if (prefix.startsWith('@')) {
-      // Tag-based: resolve @tag to node ID
-      const tag = prefix; // e.g. "@prompt"
-      const matches = [];
-      for (const [nid, node] of Object.entries(apiPrompt)) {
-        if (node?._meta?.title === tag) {
-          matches.push(nid);
-        }
-      }
-      if (matches.length === 0) {
-        throw new Error(`Tag "${tag}" not found in workflow. No node has _meta.title === "${tag}".`);
-      }
-      if (matches.length > 1) {
-        throw new Error(`Tag "${tag}" is ambiguous: matched nodes [${matches.join(', ')}]. Each @tag must be unique.`);
-      }
-      nodeId = matches[0];
-    } else {
-      // Node-id based (passthrough)
-      nodeId = prefix;
-    }
+    const { prefix, key, raw } = parseOverrideArg(s);
+    const nodeId = resolveNodeTarget(apiPrompt, prefix);
 
     overrides[nodeId] ||= {};
     overrides[nodeId][key] = coerceValue(raw);
@@ -143,5 +144,7 @@ module.exports = {
   applyNodeInputOverrides,
   parseSetArgs,
   resolveTagOverrides,
+  parseOverrideArg,
+  resolveNodeTarget,
   coerceValue,
 };

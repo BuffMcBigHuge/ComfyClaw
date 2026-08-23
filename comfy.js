@@ -294,7 +294,7 @@ class ComfyUI {
     }
   }
 
-  queue({ workflowDataAPI }) {
+  queue({ workflowDataAPI, workflowDataUI }) {
     return new Promise(async (resolve, reject) => {
       try {
         const options = {
@@ -305,6 +305,11 @@ class ComfyUI {
           body: JSON.stringify({
             prompt: workflowDataAPI,
             client_id: this.clientId,
+            ...(workflowDataUI ? {
+              extra_data: {
+                extra_pnginfo: { workflow: workflowDataUI },
+              },
+            } : {}),
           }),
         };
 

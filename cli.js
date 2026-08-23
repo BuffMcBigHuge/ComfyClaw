@@ -10,12 +10,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { listWorkflows, loadWorkflow } = require('./workflows');
-const { applyNodeInputOverrides, resolveTagOverrides } = require('./patch');
+const { listWorkflows, loadWorkflow, loadUIWorkflow, findUIWorkflow } = require('./workflows');
 const { getServerWithLowestQueue } = require('./helpers');
 const ComfyUI = require('./comfy');
 const config = require('./config');
 const inventory = require('./inventory');
+const {
+    validateOverrideBatch,
+    validatePromptGraph,
+    applyValidatedSetPlans,
+    insertImplicitLoader,
+} = require('./validation');
+const { diffUIToAPI, modeName, nodeLabel } = require('./workflow-diff');
+const { compileUIWorkflow } = require('./ui-compiler');
 
 // ── Optional S3 Upload ──────────────────────────────────────────────────────
 
@@ -104,19 +111,88 @@ function summarizeNode(nodeId, node) {
     return { nodeId, title, classType, scalar, linked };
 }
 
+function normalizeServerURL(value) {
+    if (!value) return null;
+    const url = /^https?:\/\//i.test(value) ? value : `http://${value}`;
+    return url.replace(/\/$/, '');
+}
+
+function extractGlobalOptions(argv) {
+    const clean = [];
+    let serverURL = null;
+    for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === '--server') {
+            if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error('Missing value for --server');
+            serverURL = normalizeServerURL(argv[++i]);
+        } else {
+            clean.push(argv[i]);
+        }
+    }
+    return { argv: clean, serverURL };
+}
+
+function parseExecutionArgs(argv, { allowOutDir }) {
+    let outDir = path.join(process.cwd(), 'outputs');
+    const setArgs = [];
+    const fileArgs = [];
+    const modeArgs = [];
+    const switchArgs = [];
+    let i = 0;
+
+    if (allowOutDir && argv[0] && !argv[0].startsWith('--')) {
+        outDir = argv[0];
+        i = 1;
+    }
+
+    for (; i < argv.length; i++) {
+        const flag = argv[i];
+        if (['--set', '--file', '--mode', '--switch'].includes(flag)) {
+            if (!argv[i + 1]) throw new Error(`Missing value for ${flag}`);
+            const destination = {
+                '--set': setArgs,
+                '--file': fileArgs,
+                '--mode': modeArgs,
+                '--switch': switchArgs,
+            }[flag];
+            destination.push(argv[++i]);
+        } else {
+            throw new Error(`Unknown option for workflow execution: ${flag}`);
+        }
+    }
+    return { outDir, setArgs, fileArgs, modeArgs, switchArgs };
+}
+
+function throwValidationErrors(errors) {
+    if (!errors.length) return;
+    const lines = ['Validation failed:'];
+    for (const error of errors) {
+        lines.push(`  ${error.flag} ${error.arg}: ${error.message}`);
+    }
+    throw new Error(lines.join('\n'));
+}
+
+function throwPromptValidationErrors(errors) {
+    if (!errors.length) return;
+    const lines = ['Compiled prompt validation failed:'];
+    for (const error of errors) {
+        lines.push(`  node ${error.nodeId}${error.key ? `.${error.key}` : ''}: ${error.message}`);
+    }
+    throw new Error(lines.join('\n'));
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 function cmdList() {
     const workflows = listWorkflows();
     if (workflows.length === 0) {
         console.log('No workflows found in workflows/ directory.');
-        console.log('Place *-api.json files in the workflows/ folder.');
+        console.log('Place UI-format .json workflows in the workflows/ folder.');
         process.exit(0);
     }
 
     console.log('Available workflows:\n');
     for (const wf of workflows) {
-        console.log(`  ${wf.name}`);
+        console.log(`  ${wf.name}  (${wf.format})`);
     }
     console.log(`\nTotal: ${workflows.length} workflow(s)`);
     console.log('\nUsage:');
@@ -157,9 +233,10 @@ async function fetchNodeInputInfo(serverURL, classType) {
     }
 }
 
-async function getServerURL() {
+async function getServerURL(explicitServer) {
+    if (explicitServer) return normalizeServerURL(explicitServer);
     const envServer = process.env.COMFYUI_SERVER;
-    if (envServer) return envServer;
+    if (envServer) return normalizeServerURL(envServer);
 
     try {
         const res = await getServerWithLowestQueue();
@@ -168,7 +245,39 @@ async function getServerURL() {
     return null;
 }
 
-async function cmdDescribe(name) {
+async function loadExecutableWorkflow(name, serverURL, { modeArgs = [], switchArgs = [] } = {}) {
+    const ui = findUIWorkflow(name);
+    if (ui) {
+        if (!serverURL) {
+            throw new Error('A ComfyUI server is required to compile a UI-format workflow. Use --server URL.');
+        }
+        const compiled = await compileUIWorkflow({
+            serverURL,
+            workflowPath: ui.path,
+            modeArgs,
+            switchArgs,
+        });
+        return compiled;
+    }
+
+    if (modeArgs.length || switchArgs.length) {
+        throw new Error('--mode and --switch require a UI-format workflow.');
+    }
+    const legacy = loadWorkflow(name);
+    return {
+        prompt: legacy.prompt,
+        workflow: null,
+        source: 'api',
+        sourcePath: legacy.path,
+        sourceNodeCount: Object.keys(legacy.prompt).length,
+        compiledNodeCount: Object.keys(legacy.prompt).length,
+        changes: [],
+        controls: [],
+        pageErrors: [],
+    };
+}
+
+async function cmdDescribe(name, argv = [], explicitServer) {
     if (!name) {
         console.error('Error: --describe requires a workflow name.');
         console.error('Usage: comfyclaw --describe <workflow>');
@@ -176,7 +285,13 @@ async function cmdDescribe(name) {
         process.exit(2);
     }
 
-    const { prompt } = loadWorkflow(name);
+    const full = argv.includes('--full');
+    const unknown = argv.filter((arg) => arg !== '--full');
+    if (unknown.length) throw new Error(`Unknown option for --describe: ${unknown[0]}`);
+
+    const serverURL = await getServerURL(explicitServer);
+    const executable = await loadExecutableWorkflow(name, serverURL);
+    const { prompt } = executable;
 
     // Find all @tagged nodes
     const tagged = [];
@@ -189,15 +304,44 @@ async function cmdDescribe(name) {
 
     tagged.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
 
-    if (tagged.length === 0) {
+    if (tagged.length === 0 && !full && executable.controls.length === 0) {
         console.log(`Workflow "${name}" has no @tags.`);
         console.log('Add _meta.title = "@tagname" to nodes you want to be editable.');
         return;
     }
 
     console.log(`Workflow: ${name}`);
+    console.log(`Source: ${executable.source} (${executable.sourcePath})`);
     console.log(`Tags: ${tagged.length}`);
+    console.log(`Nodes: ${Object.keys(prompt).length}`);
     console.log('');
+
+    if (executable.controls.length) {
+        console.log('UI switches:');
+        for (const control of executable.controls) {
+            const selector = control.title?.startsWith('@') ? control.title : control.nodeId;
+            console.log(`  ${control.title}  (node ${control.nodeId})`);
+            for (const group of control.groups) {
+                const short = group.title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+                console.log(`    --switch ${selector}.${short}=${group.enabled ? 'on' : 'off'}`);
+            }
+        }
+        console.log('');
+    }
+
+    if (full) {
+        const rows = Object.entries(prompt)
+            .map(([nodeId, node]) => summarizeNode(nodeId, node))
+            .sort((a, b) => a.nodeId.localeCompare(b.nodeId, undefined, { numeric: true }));
+        console.log('Full node table:');
+        console.log('  ID       CLASS                              EDITABLE KEYS');
+        for (const row of rows) {
+            const classType = row.classType || '(unknown)';
+            const keys = row.scalar.map((item) => item.key).join(', ') || '-';
+            console.log(`  ${String(row.nodeId).padEnd(8)} ${classType.padEnd(34)} ${keys}`);
+        }
+        console.log('');
+    }
 
     for (const n of tagged) {
         console.log(`${n.title}  (node ${n.nodeId}, ${n.classType})`);
@@ -221,6 +365,8 @@ async function cmdDescribe(name) {
         console.log('');
     }
 
+    if (tagged.length === 0) return;
+
     console.log('Example:');
     // Build a concrete example from the first tag with scalar inputs
     const example = tagged.find((t) => t.scalar.length > 0);
@@ -233,7 +379,7 @@ async function cmdDescribe(name) {
     }
 }
 
-async function cmdRun(name, argv) {
+async function cmdRun(name, argv, explicitServer) {
     if (!name) {
         console.error('Error: --run requires a workflow name.');
         console.error('Usage: comfyclaw --run <workflow> [outDir] [--set @tag.key=value ...] [--file @tag.key=path ...]');
@@ -241,37 +387,11 @@ async function cmdRun(name, argv) {
         process.exit(2);
     }
 
-    // Parse remaining argv: [outDir] [--set key=val ...] [--file key=path ...]
-    let outDir = path.join(process.cwd(), 'outputs');
-    const setArgs = [];
-    const fileArgs = [];
-    let i = 0;
-
-    // First non-flag arg after name is outDir
-    if (argv[0] && !argv[0].startsWith('--')) {
-        outDir = argv[0];
-        i = 1;
-    }
-
-    for (; i < argv.length; i++) {
-        if (argv[i] === '--set') {
-            if (!argv[i + 1]) throw new Error('Missing value for --set');
-            setArgs.push(argv[i + 1]);
-            i++;
-        } else if (argv[i] === '--file') {
-            if (!argv[i + 1]) throw new Error('Missing value for --file');
-            fileArgs.push(argv[i + 1]);
-            i++;
-        }
-    }
-
-    fs.mkdirSync(outDir, { recursive: true });
-
-    const { prompt: apiPrompt } = loadWorkflow(name);
+    const { outDir, setArgs, fileArgs, modeArgs, switchArgs } = parseExecutionArgs(argv, { allowOutDir: true });
 
     // Server selection (needed early for file uploads)
     const envServer = process.env.COMFYUI_SERVER;
-    let serverToUse = envServer || null;
+    let serverToUse = normalizeServerURL(explicitServer || envServer);
 
     if (!serverToUse) {
         const res = await getServerWithLowestQueue();
@@ -281,42 +401,53 @@ async function cmdRun(name, argv) {
         serverToUse = res.serverToUse;
     }
 
-    // Upload files (--file args) BEFORE override resolution so that
-    // the uploaded server-side filenames are included in setArgs
-    if (fileArgs.length > 0) {
-        const uploader = { comfyUIServerURL: serverToUse };
-        uploader.uploadFile = ComfyUI.prototype.uploadFile.bind(uploader);
-
-        for (const arg of fileArgs) {
-            const idxEq = arg.indexOf('=');
-            if (idxEq === -1) throw new Error(`Invalid --file '${arg}'. Expected @tag.key=/path/to/file or nodeId.key=/path/to/file`);
-            const left = arg.slice(0, idxEq);
-            const filePath = arg.slice(idxEq + 1);
-
-            if (!fs.existsSync(filePath)) {
-                throw new Error(`File not found: ${path.resolve(filePath)}`);
-            }
-
-            const result = await uploader.uploadFile(filePath);
-            const serverFilename = result.name;
-
-            setArgs.push(`${left}=${serverFilename}`);
-            console.log(`  Mapped --file ${left} → ${serverFilename}`);
+    const executable = await loadExecutableWorkflow(name, serverToUse, { modeArgs, switchArgs });
+    const apiPrompt = executable.prompt;
+    console.log(
+        executable.source === 'ui'
+            ? `Compiled UI workflow: ${executable.sourceNodeCount} UI nodes → ${executable.compiledNodeCount} API nodes`
+            : `Loaded legacy API workflow: ${executable.compiledNodeCount} nodes`
+    );
+    for (const change of executable.changes) {
+        if (change.type === 'switch') {
+            console.log(`  Switch ${change.controllerTitle}.${change.group} = ${change.enabled ? 'on' : 'off'}`);
+        } else {
+            console.log(`  Mode node ${change.nodeId} (${change.title}) = ${change.mode}`);
         }
     }
 
-    // Resolve tag-based + node-id overrides (now includes any --file entries)
-    const overrides = resolveTagOverrides(apiPrompt, setArgs);
-    const { applied, skipped } = applyNodeInputOverrides(apiPrompt, overrides);
+    const graphValidation = await validatePromptGraph(apiPrompt, { serverURL: serverToUse });
+    throwPromptValidationErrors(graphValidation.errors);
+    graphValidation.warnings.forEach((warning) => console.warn(`Warning: ${warning}`));
+
+    // Validate the entire batch before uploading files or queueing work.
+    const validation = await validateOverrideBatch(apiPrompt, { setArgs, fileArgs, serverURL: serverToUse });
+    throwValidationErrors(validation.errors);
+    validation.warnings.forEach((warning) => console.warn(`Warning: ${warning}`));
+
+    const applied = applyValidatedSetPlans(apiPrompt, validation.setPlans);
+    const uploader = { comfyUIServerURL: serverToUse };
+    uploader.uploadFile = ComfyUI.prototype.uploadFile.bind(uploader);
+    for (const plan of validation.filePlans) {
+        const result = await uploader.uploadFile(plan.filePath);
+        const serverFilename = result.subfolder
+            ? `${result.subfolder}/${result.name}`
+            : result.name;
+        if (plan.action === 'loader') {
+            const loaderId = insertImplicitLoader(apiPrompt, plan, serverFilename);
+            console.log(`  Mapped --file ${plan.left} → node ${loaderId} (${apiPrompt[loaderId].class_type}) → ${plan.nodeId}.${plan.key}`);
+        } else {
+            apiPrompt[plan.nodeId].inputs[plan.key] = serverFilename;
+            console.log(`  Mapped --file ${plan.left} → ${serverFilename}`);
+        }
+    }
 
     if (applied.length) {
         console.log('Applied overrides:');
         applied.forEach((o) => console.log(`  - node ${o.nodeId}: ${o.key} = ${JSON.stringify(o.value)}`));
     }
-    if (skipped.length) {
-        console.log('Skipped overrides:');
-        skipped.forEach((o) => console.log(`  - node ${o.nodeId}${o.key ? '.' + o.key : ''}: ${o.reason}`));
-    }
+
+    fs.mkdirSync(outDir, { recursive: true });
 
     // Detect save nodes
     const saveNodes = Object.keys(apiPrompt).filter(
@@ -409,7 +540,7 @@ async function cmdRun(name, argv) {
 
             onOpenCallback: async (self) => {
                 try {
-                    await self.queue({ workflowDataAPI: apiPrompt });
+                    await self.queue({ workflowDataAPI: apiPrompt, workflowDataUI: executable.workflow });
                 } catch (e) {
                     rejectDone(e);
                 }
@@ -432,10 +563,113 @@ async function cmdRun(name, argv) {
     downloaded.forEach((p) => console.log(`  - ${p}`));
 }
 
+async function cmdCheck(name, argv, explicitServer) {
+    if (!name) {
+        console.error('Error: --check requires a workflow name.');
+        console.error('Usage: comfyclaw --check <workflow> [--set ...] [--file ...] [--server URL]');
+        process.exit(2);
+    }
+
+    const { setArgs, fileArgs, modeArgs, switchArgs } = parseExecutionArgs(argv, { allowOutDir: false });
+    const serverURL = await getServerURL(explicitServer);
+    const executable = await loadExecutableWorkflow(name, serverURL, { modeArgs, switchArgs });
+    const { prompt } = executable;
+    const graphValidation = await validatePromptGraph(prompt, { serverURL });
+    throwPromptValidationErrors(graphValidation.errors);
+    const validation = await validateOverrideBatch(prompt, { setArgs, fileArgs, serverURL });
+    throwValidationErrors(validation.errors);
+
+    console.log(`Check passed: ${name}`);
+    console.log(`Source: ${executable.source}; compiled nodes: ${executable.compiledNodeCount}`);
+    if (serverURL) console.log(`Server schema: ${serverURL}`);
+    for (const change of executable.changes) {
+        if (change.type === 'switch') {
+            console.log(`  --switch ${change.controllerTitle}.${change.group}=${change.enabled ? 'on' : 'off'}`);
+        } else {
+            console.log(`  --mode ${change.nodeId}=${change.mode}`);
+        }
+    }
+    validation.warnings.forEach((warning) => console.warn(`Warning: ${warning}`));
+    graphValidation.warnings.forEach((warning) => console.warn(`Warning: ${warning}`));
+    for (const plan of validation.setPlans) {
+        const changed = plan.value !== coerceForDisplay(plan.raw);
+        const suffix = changed ? ` → ${JSON.stringify(plan.value)}` : '';
+        console.log(`  --set ${plan.nodeId}.${plan.key}${suffix}`);
+    }
+    for (const plan of validation.filePlans) {
+        const action = plan.action === 'loader'
+            ? `insert ${plan.connectionType === 'IMAGE' ? 'LoadImage' : 'LoadAudio'} and connect it`
+            : 'upload into scalar file field';
+        console.log(`  --file ${plan.nodeId}.${plan.key}: ${action}`);
+    }
+    console.log('No files uploaded; no prompt queued.');
+}
+
+function coerceForDisplay(raw) {
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    if (/^-?\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
+    return raw;
+}
+
+async function cmdDiffUI(name, explicitServer) {
+    if (!name) {
+        console.error('Error: --diff-ui requires a workflow name.');
+        console.error('Usage: comfyclaw --diff-ui <workflow>');
+        process.exit(2);
+    }
+
+    const { workflow, path: uiPath } = loadUIWorkflow(name);
+    const serverURL = await getServerURL(explicitServer);
+    const executable = await loadExecutableWorkflow(name, serverURL);
+    const { prompt } = executable;
+    const diff = diffUIToAPI(workflow, prompt);
+    const counts = {};
+    for (const entry of diff.missing) counts[entry.classification] = (counts[entry.classification] || 0) + 1;
+
+    console.log(`UI/API diff: ${name}`);
+    console.log(`  UI:  ${uiPath} (${diff.uiNodeCount} nodes)`);
+    console.log(`  API: ephemeral frontend compile (${diff.apiNodeCount} nodes)`);
+    console.log(`  Loss/transform summary: ${Object.entries(counts).map(([key, count]) => `${key}=${count}`).join(', ') || 'none'}`);
+
+    console.log('\nrgthree runtime switches:');
+    for (const item of diff.rgthreeSwitches) {
+        const state = item.retained ? 'retained' : 'removed';
+        const dropped = item.dropped.length ? `; dropped inputs: ${item.dropped.join(', ')}` : '';
+        console.log(`  ${nodeLabel(item.node)}: ${state}; UI links ${item.uiConnected.length} → API links ${item.apiConnected.length}${dropped}`);
+    }
+
+    console.log('\nrgthree frontend controllers (never executable API nodes):');
+    for (const controller of diff.controllers) {
+        const matcher = [
+            controller.matchTitle && `title=/${controller.matchTitle}/`,
+            controller.matchColors && `color=${controller.matchColors}`,
+        ].filter(Boolean).join(', ');
+        const groups = controller.groups.length
+            ? `; groups: ${controller.groups.map((group) => group.title).join(', ')}`
+            : '';
+        console.log(`  ${nodeLabel(controller.node)}: ${matcher || 'no matcher'}${groups}`);
+    }
+
+    console.log('\nNodes not preserved one-for-one:');
+    for (const entry of diff.missing) {
+        console.log(`  ${nodeLabel(entry.node)}: ${entry.classification} (${modeName(entry.node.mode || 0)})`);
+    }
+
+    if (diff.chains.length) {
+        console.log('\nStripped/bypassed graph boundaries:');
+        for (const chain of diff.chains) {
+            console.log(`  [${chain.nodes.map((node) => nodeLabel(node)).join(' → ')}]`);
+            chain.incoming.forEach((link) => console.log(`    in:  ${link.text}`));
+            chain.outgoing.forEach((link) => console.log(`    out: ${link.text}`));
+        }
+    }
+}
+
 // ── Inventory Commands ───────────────────────────────────────────────────────
 
-async function cmdInventoryPull() {
-    const serverURL = await inventory.getServerURL();
+async function cmdInventoryPull(explicitServer) {
+    const serverURL = explicitServer || await inventory.getServerURL();
     if (!serverURL) {
         console.error('No ComfyUI server available. Set COMFYUI_SERVER or configure servers in config.js.');
         process.exit(1);
@@ -521,7 +755,7 @@ function cmdInventoryList(type) {
     }
 }
 
-async function cmdInventory(argv) {
+async function cmdInventory(argv, explicitServer) {
     const sub = argv[0];
 
     if (!sub || sub === 'help') {
@@ -539,7 +773,7 @@ async function cmdInventory(argv) {
     }
 
     if (sub === 'pull') {
-        await cmdInventoryPull();
+        await cmdInventoryPull(explicitServer);
     } else if (sub === 'scan') {
         cmdInventoryScan(argv.slice(1));
     } else if (sub === 'list') {
@@ -557,12 +791,20 @@ function printUsage() {
     console.log('ComfyClaw — Discover, inspect, and run ComfyUI workflows.\n');
     console.log('Usage:');
     console.log('  comfyclaw --list                              List available workflows');
-    console.log('  comfyclaw --describe <workflow>               Show editable @tag parameters');
-    console.log('  comfyclaw --run <workflow> [outDir] [--set] [--file]   Run a workflow');
+    console.log('  comfyclaw --describe <workflow> [--full]      Show tags or the full node table');
+    console.log('  comfyclaw --check <workflow> [controls]       Compile and validate without queueing');
+    console.log('  comfyclaw --diff-ui <workflow>                Explain UI nodes lost in API export');
+    console.log('  comfyclaw --run <workflow> [outDir] [controls]          Run a workflow');
     console.log('  comfyclaw --inventory <subcommand>            Manage models, LoRAs, VAEs\n');
+    console.log('Connection:');
+    console.log('  --server URL                Use one ComfyUI server for this command\n');
     console.log('Override parameters:');
     console.log('  --set  @tag.key=value      Tag-based override (recommended)');
     console.log('  --set  nodeId.key=value    Direct node-ID override\n');
+    console.log('UI workflow controls:');
+    console.log('  --mode nodeId=active|mute|bypass');
+    console.log('  --mode @tag=active|mute|bypass');
+    console.log('  --switch controller.group=on|off\n');
     console.log('File upload (images, audio):');
     console.log('  --file @tag.key=/path       Upload file to server and inject filename');
     console.log('  --file nodeId.key=/path     Same, using node ID\n');
@@ -574,10 +816,13 @@ function printUsage() {
     console.log('  COMFYCLAW_WORKFLOWS  Path to workflows directory (default: ./workflows)');
     console.log('  COMFYUI_SERVER       Force a specific server URL');
     console.log('  COMFYUI_TIMEOUT_MS   Max wait time (default: 180000)');
+    console.log('  COMFYCLAW_BROWSER_PATH  Chrome/Edge executable for UI compilation');
 }
 
 async function main() {
-    const argv = process.argv.slice(2);
+    const parsed = extractGlobalOptions(process.argv.slice(2));
+    const argv = parsed.argv;
+    const explicitServer = parsed.serverURL;
 
     if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
         printUsage();
@@ -589,11 +834,15 @@ async function main() {
     if (command === '--list') {
         cmdList();
     } else if (command === '--describe') {
-        await cmdDescribe(argv[1]);
+        await cmdDescribe(argv[1], argv.slice(2), explicitServer);
+    } else if (command === '--check') {
+        await cmdCheck(argv[1], argv.slice(2), explicitServer);
+    } else if (command === '--diff-ui') {
+        await cmdDiffUI(argv[1], explicitServer);
     } else if (command === '--run') {
-        await cmdRun(argv[1], argv.slice(2));
+        await cmdRun(argv[1], argv.slice(2), explicitServer);
     } else if (command === '--inventory') {
-        await cmdInventory(argv.slice(1));
+        await cmdInventory(argv.slice(1), explicitServer);
     } else {
         console.error(`Unknown command: ${command}`);
         printUsage();
@@ -603,5 +852,5 @@ async function main() {
 
 main().catch((err) => {
     console.error(`Error: ${err.message}`);
-    process.exit(1);
+    process.exitCode = 1;
 });

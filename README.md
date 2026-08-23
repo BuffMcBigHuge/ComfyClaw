@@ -33,7 +33,7 @@ After either method, the `comfyclaw` command is available globally.
 
 ## Quick Start
 
-Create a `workflows/` folder in your project directory and place your ComfyUI API-format workflow JSON files there (see [Adding Workflows](#adding-workflows)).
+Create a `workflows/` folder in your project directory and place normal ComfyUI UI workflow exports there (see [Adding Workflows](#adding-workflows)).
 
 ```bash
 # List available workflows
@@ -41,6 +41,14 @@ comfyclaw --list
 
 # See what's editable (queries the live server for available models/samplers)
 comfyclaw --describe text2image-example
+
+# Discover every API node and scalar key
+comfyclaw --describe text2image-example --full
+
+# Validate a batch without uploading or queueing
+comfyclaw --check text2image-example --server http://localhost:8188 \
+  --mode @optional_branch=active \
+  --set 3.steps=25
 
 # Run with tag-based overrides
 comfyclaw --run text2image-example outputs \
@@ -68,51 +76,53 @@ Total: 1 workflow(s)
 
 ### `--describe <workflow>`
 
-Shows every `@tag` in a workflow and its editable parameters. If a ComfyUI server is reachable, it queries `/object_info` to show all **valid values** for enum inputs (checkpoints, samplers, schedulers). The currently selected value is marked with ★.
+Shows every `@tag` in a workflow and its scalar parameters. Add `--full` to print
+a node-ID table for the complete API graph, including untagged nodes.
 
+```bash
+comfyclaw --describe video-example --full
 ```
-$ comfyclaw --describe text2image-example
-Workflow: text2image-example
-Tags: 5
-Server: http://localhost:8188
 
-@checkpoint  (node 4, CheckpointLoaderSimple)
-  editable:
-    --set @checkpoint.ckpt_name="v1-5-pruned-emaonly-fp16.safetensors"
-      values (37):
-        ★ v1-5-pruned-emaonly-fp16.safetensors
-          ...
+```text
+Full node table:
+  ID       CLASS                              EDITABLE KEYS
+  4        CheckpointLoaderSimple             ckpt_name
+  6        CLIPTextEncode                     text
+  ...
+```
 
-@ksampler  (node 3, KSampler)
-  editable:
-    --set @ksampler.seed=156680208700286
-    --set @ksampler.steps=20
-    --set @ksampler.cfg=8
-    --set @ksampler.sampler_name="euler"
-      values (44):
-        ★ euler
-          euler_ancestral
-          ...
-    --set @ksampler.scheduler="normal"
-    --set @ksampler.denoise=1
-  linked (do NOT override): model, positive, negative, latent_image
+### `--check <workflow> [--set ...] [--file ...]`
 
-@negative  (node 7, CLIPTextEncode)
-  editable:
-    --set @negative.text="text, watermark"
+Compiles the UI workflow through the selected server's actual frontend, then validates
+the complete executable graph and every override against `/object_info`. It does not
+upload files or queue the prompt.
 
-@prompt  (node 6, CLIPTextEncode)
-  editable:
-    --set @prompt.text="beautiful scenery nature glass bottle landscape..."
+```bash
+comfyclaw --check video-example --server http://localhost:8188 \
+  --switch "@references.reference_1=on" \
+  --set "12.aspect_ratio=9:16" \
+  --file "@reference_1.image=/path/reference.png"
+```
 
-@save  (node 9, SaveImage)
-  editable:
-    --set @save.filename_prefix="ComfyUI"
+Unique enum labels can use their short form. For example, `9:16` resolves to
+`9:16 (Portrait Widescreen)` when that is the only matching option.
+
+### `--diff-ui <workflow>`
+
+Compares `workflows/<name>.json` with `workflows/<name>-api.json` and reports:
+
+- bypassed, muted, frontend-only, and expanded-subgraph nodes;
+- rgthree switches retained in the API but missing some of their UI inputs;
+- frontend-only `Fast Groups Bypasser` matchers;
+- the incoming and outgoing boundaries of stripped chains.
+
+```bash
+comfyclaw --diff-ui video-example
 ```
 
 ### `--run <workflow> [outDir] [--set ...]`
 
-Executes a workflow on a ComfyUI server, downloads output files.
+Compiles and executes a UI workflow on a ComfyUI server, then downloads output files.
 
 ```bash
 comfyclaw --run text2image-example outputs \
@@ -123,10 +133,11 @@ comfyclaw --run text2image-example outputs \
 ```
 
 **What happens:**
-1. Loads workflow, applies `--set` overrides
-2. Connects to a ComfyUI server (auto-selects lowest queue)
-3. Queues the prompt and waits via WebSocket
-4. Downloads output files to `outDir`
+1. Loads the UI workflow into the selected server's frontend and custom extensions
+2. Applies `--mode` and `--switch` controls
+3. Captures the frontend-generated API prompt in memory and validates the complete graph
+4. Uploads valid files and applies `--set` / `--file` overrides
+5. Queues through `/prompt`, waits via WebSocket, and downloads outputs to `outDir`
 
 ---
 
@@ -145,6 +156,24 @@ Node-ID based (fallback for untagged workflows):
 ```
 
 **Safety:** Linked inputs (graph wiring) are never overridden.
+
+UI-native controls are applied before compilation:
+
+```bash
+--mode @optional_branch=active
+--mode 42=bypass
+--switch "@references.reference_1=on"
+```
+
+`--switch` addresses a frontend controller and one of its groups. `--describe` lists
+the available controller/group selectors generated by the live frontend.
+
+For an unconnected `IMAGE` or `AUDIO` socket, `--file` inserts an implicit `LoadImage`
+or `LoadAudio` node and wires it to the target. This includes autogrow inputs such as:
+
+```bash
+--file "12.images.image_0=/path/reference.png"
+```
 
 ---
 
@@ -178,12 +207,15 @@ Each `@tag` must be unique within a workflow.
 
 ## Adding Workflows
 
-1. In ComfyUI, click **Save (API Format)** to export your workflow as an API prompt graph (this is the JSON with numeric node IDs as keys — **not** the default UI export)
-2. Tag the nodes you want to be editable with `@tag` names in `_meta.title`
-3. Save as `workflows/<name>-api.json` in the directory where you'll run `comfyclaw`
-4. Verify with `comfyclaw --describe <name>`
+1. In ComfyUI, use the normal **Save** workflow export.
+2. Tag nodes you want to address with titles beginning with `@`.
+3. Save the file as `workflows/<name>.json`.
+4. Verify it with `comfyclaw --describe <name> --server <url>`.
 
-> **Important:** ComfyClaw requires the **API format** export. The default "Save" in ComfyUI produces a UI export (with `nodes` and `links` arrays) which is not supported. Use **Save (API Format)** instead.
+ComfyClaw loads this source into the server's installed frontend, including custom
+extensions, applies UI controls, and captures the exact ephemeral API request produced
+by ComfyUI. Generated API JSON is not written to disk. Existing `<name>-api.json` files
+remain supported as a legacy fallback when no UI workflow exists.
 
 ---
 
@@ -243,10 +275,14 @@ comfyclaw --inventory list checkpoints
 | `COMFYCLAW_WORKFLOWS` | `./workflows` | Path to workflows directory |
 | `COMFYUI_SERVER` | (auto-select) | Force a specific server URL |
 | `COMFYUI_TIMEOUT_MS` | `180000` | Max wait for workflow completion (ms) |
+| `COMFYCLAW_BROWSER_PATH` | auto-detect | Chrome or Edge executable used for UI compilation |
 | `AWS_ACCESS_KEY_ID` | — | AWS credentials (for S3 upload) |
 | `AWS_SECRET_ACCESS_KEY` | — | AWS credentials (for S3 upload) |
 | `AWS_REGION` | `us-east-1` | AWS region |
 | `S3_BUCKET` | — | S3 bucket name |
+
+Use `--server <url>` to select a server for one command without changing the environment.
+The `http://` prefix is optional.
 
 ---
 
@@ -313,14 +349,17 @@ Error: ComfyUI server error (HTTP 400):
 ## Architecture
 
 ```
-cli.js              Unified CLI entrypoint (--list, --describe, --run, --inventory)
+cli.js              Unified CLI entrypoint (--list, --describe, --check, --diff-ui, --run, --inventory)
 workflows.js        Workflow discovery and loading
 patch.js            Safe parameter overrides with @tag resolution
+validation.js       Live-schema validation, enum resolution, and implicit file loaders
+ui-compiler.js      Native ComfyUI frontend compilation and UI control application
+workflow-diff.js    UI/API export loss and rgthree diagnostics
 comfy.js            ComfyUI WebSocket/HTTP client
 helpers.js          Server selection (lowest queue)
 inventory.js        Model/LoRA/VAE inventory (pull, scan, list)
 config.js           Server and AWS S3 configuration
-workflows/          Workflow JSON files (*-api.json)
+workflows/          UI workflow JSON files (`<name>.json`); legacy API files are optional
 inventory/          Discovered asset lists and metadata
 ```
 
